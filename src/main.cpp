@@ -1,5 +1,5 @@
-#include <Arduino.h>
 #include <Ticker.h>
+#include <Arduino.h>
 
 Ticker pwmTicker;
 
@@ -19,6 +19,7 @@ void turnOFFsolenoid();
 void turnONsolenoid();
 void motorStopped(void);
 void interruptRoutine(void);
+void updateMotorSpeed();
 
 // Integers to represent values from sticks and pots
 int ch2Value;
@@ -34,7 +35,8 @@ volatile bool rotating_anticlockwise = false;
 
 const int steps_per_rev = 200;
 
-int speed = 100; // speed in Rev / Min
+int speed = 100;     // speed in Rev / Min
+int targetSpeed = 0; // target speed based on joystick input
 
 const int PWM_CHANNEL = 0; // ESP32 has 16 channels which can generate 16 independent waveforms
 int freq = 300;            // Recall that Arduino Uno is ~490 Hz. Official ESP32 example uses 5,000Hz
@@ -47,163 +49,171 @@ const int MAX_DUTY_CYCLE = (int)(pow(2, resolution) - 1);
 // If the channel is off, return the default value
 int readChannel(int channelInput, int minLimit, int maxLimit, int defaultValue)
 {
-  int ch = pulseIn(channelInput, HIGH, 30000);
-  if (ch < 100)
-    return defaultValue;
-  return map(ch, 1000, 2000, minLimit, maxLimit);
+    int ch = pulseIn(channelInput, HIGH, 30000);
+    if (ch < 100)
+        return defaultValue;
+    return map(ch, 1000, 2000, minLimit, maxLimit);
 }
 
 // Read the switch channel and return a boolean value
 bool readSwitch(byte channelInput, bool defaultValue)
 {
-  int intDefaultValue = (defaultValue) ? 100 : 0;
-  int ch = readChannel(channelInput, 0, 100, intDefaultValue);
-  return (ch > 50);
+    int intDefaultValue = (defaultValue) ? 100 : 0;
+    int ch = readChannel(channelInput, 0, 100, intDefaultValue);
+    return (ch > 50);
 }
 
 void IRAM_ATTR interruptRoutine()
 {
-  if (rotating_anticlockwise)
-  {
-    position -= 1;
-    if (position == -1)
+    if (rotating_anticlockwise)
     {
-      position = 200;
+        position -= 1;
+        if (position == -1)
+        {
+            position = 200;
+        }
     }
-  }
-
-  else if (rotating_clockwise)
-  {
-    position += 1;
-    if (position == 201)
+    else if (rotating_clockwise)
     {
-      position = 0;
+        position += 1;
+        if (position == 201)
+        {
+            position = 0;
+        }
     }
-  }
 
-  if (position == 190)
-  {
-    turnONsolenoid();
-  }
+    if (position == 190)
+    {
+        turnONsolenoid();
+    }
 
-  if (position == 100)
-  {
-    turnOFFsolenoid();
-  }
+    if (position == 100)
+    {
+        turnOFFsolenoid();
+    }
 
-  // Serial.println(position);
+    // Serial.println(position);
 }
 
 void setup()
 {
-  Serial.begin(115200);
-  pinMode(STEP, OUTPUT);
-  pinMode(DIR, OUTPUT);
-  pinMode(EN_PIN, OUTPUT);
-  pinMode(SOLENOID, OUTPUT);
-  pinMode(INTERUPT_PIN, INPUT);
+    Serial.begin(115200);
+    pinMode(STEP, OUTPUT);
+    pinMode(DIR, OUTPUT);
+    pinMode(EN_PIN, OUTPUT);
+    pinMode(SOLENOID, OUTPUT);
+    pinMode(INTERUPT_PIN, INPUT);
 
-  digitalWrite(EN_PIN, HIGH);
-  attachInterrupt(INTERUPT_PIN, interruptRoutine, RISING);
+    digitalWrite(EN_PIN, HIGH);
+    attachInterrupt(INTERUPT_PIN, interruptRoutine, RISING);
 
-  freq = RevToFreq(speed);
-  // Sets up a channel (0-15), a PWM duty cycle frequency, and a PWM resolution (1 - 16 bits)
-  // ledcSetup(uint8_t channel, double freq, uint8_t resolution_bits);
-  // Initialize the Servo on the specified pin
-
-  pwmTicker.attach_ms(1000 / freq, []()
-                      {
+    freq = RevToFreq(speed);
+    // Sets up a channel (0-15), a PWM duty cycle frequency, and a PWM resolution (1 - 16 bits)
+    pwmTicker.attach_ms(1000 / freq, []()
+                        {
     static bool state = false;
     state = !state;
     digitalWrite(STEP, state ? HIGH : LOW); });
-  // Set all pins as inputs
-  pinMode(CH2, INPUT);
-  pinMode(CH3, INPUT);
+
+    // Set all pins as inputs
+    pinMode(CH2, INPUT);
+    pinMode(CH3, INPUT);
 }
 
 void loop()
 {
-  // Get values for each channel
-  ch2Value = readChannel(CH2, -100, 100, 0);
-  ch3Value = readChannel(CH3, -100, 100, -100);
+    // Get values for each channel
+    ch2Value = readChannel(CH2, -100, 100, 0);
+    ch3Value = readChannel(CH3, -100, 100, -100);
 
-  if (ch3Value < -110)
-  {
-    digitalWrite(EN_PIN, HIGH);
-    turnOFFsolenoid();
-    motorStopped();
-  }
+    if (ch3Value < -110)
+    {
+        digitalWrite(EN_PIN, HIGH);
+        turnOFFsolenoid();
+        motorStopped();
+    }
+    else if (ch3Value > 8)
+    {
+        rotateClockWise();
+        digitalWrite(EN_PIN, LOW);
+        targetSpeed = map(ch3Value, 9, 100, 0, 180);
+    }
+    else if (ch3Value < -8)
+    {
+        rotateAntiClockWise();
+        digitalWrite(EN_PIN, LOW);
+        targetSpeed = map(ch3Value, -9, -100, 0, 180);
+    }
+    else
+    {
+        digitalWrite(EN_PIN, HIGH);
+        turnOFFsolenoid();
+        motorStopped();
+        targetSpeed = 0;
+    }
 
-  else if (ch3Value > 8)
-  {
-    rotateClockWise();
-    digitalWrite(EN_PIN, LOW);
-    speed = map(ch3Value, 9, 100, 30, 160);
-  }
+    updateMotorSpeed();
 
-  else if (ch3Value < -8)
-  {
-    rotateAntiClockWise();
-    digitalWrite(EN_PIN, LOW);
-    speed = map(ch3Value, -9, -100, 30, 160);
-  }
-
-  else
-  {
-    digitalWrite(EN_PIN, HIGH);
-    turnOFFsolenoid();
-    motorStopped();
-  }
-
-  freq = RevToFreq(speed);
-
-  pwmTicker.attach_ms(1000 / freq, []()
-                      {
+    freq = RevToFreq(speed);
+    pwmTicker.attach_ms(1000 / freq, []()
+                        {
     static bool state = false;
     state = !state;
     digitalWrite(STEP, state ? HIGH : LOW); });
 
-  // Print to Serial Monitor
-  Serial.print(" | Ch2: ");
-  Serial.print(ch2Value);
-  Serial.print(" | Ch3: ");
-  Serial.println(ch3Value);
+    // Print to Serial Monitor
+    Serial.print(" | Ch2: ");
+    Serial.print(ch2Value);
+    Serial.print(" | Ch3: ");
+    Serial.println(ch3Value);
 
-  // Serial.println(position);
+    // Serial.println(position);
+}
+
+void updateMotorSpeed()
+{
+    if (speed < targetSpeed)
+    {
+        speed += 1; // Adjust the increment value for smoother or faster acceleration
+    }
+    else if (speed > targetSpeed)
+    {
+        speed -= 1; // Adjust the decrement value for smoother or faster deceleration
+    }
 }
 
 int RevToFreq(int Rev)
 {
-  float tempFrequency = (200.0 / 60.0) * Rev;
-  int frequency = (int)round(tempFrequency);
-  // Serial.println(frequency);
-  return frequency;
+    float tempFrequency = (200.0 / 60.0) * Rev;
+    int frequency = (int)round(tempFrequency);
+    // Serial.println(frequency);
+    return frequency;
 }
 
 void rotateClockWise(void)
 {
-  rotating_clockwise = true;
-  digitalWrite(DIR, LOW);
+    rotating_clockwise = true;
+    digitalWrite(DIR, LOW);
 }
 
 void rotateAntiClockWise(void)
 {
-  rotating_anticlockwise = true;
-  digitalWrite(DIR, HIGH);
+    rotating_anticlockwise = true;
+    digitalWrite(DIR, HIGH);
 }
 
 void motorStopped(void)
 {
-  rotating_anticlockwise = false;
-  rotating_clockwise = false;
+    rotating_anticlockwise = false;
+    rotating_clockwise = false;
 }
 
 void turnONsolenoid()
 {
-  digitalWrite(SOLENOID, HIGH);
+    digitalWrite(SOLENOID, HIGH);
 }
 
 void turnOFFsolenoid()
 {
-  digitalWrite(SOLENOID, LOW);
+    digitalWrite(SOLENOID, LOW);
 }
