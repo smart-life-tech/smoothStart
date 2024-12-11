@@ -14,7 +14,11 @@ const int EN_PIN = 21;
 
 int RevToFreq(int Rev);
 void rotateClockWise(void);
-void rotateClockWise(void);
+void rotateAntiClockWise(void);
+void turnOFFsolenoid();
+void turnONsolenoid();
+void motorStopped(void);
+void interruptRoutine(void);
 
 // Integers to represent values from sticks and pots
 int ch2Value;
