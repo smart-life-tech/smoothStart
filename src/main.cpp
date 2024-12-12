@@ -1,202 +1,77 @@
-#include <Ticker.h>
 #include <Arduino.h>
+#include <Ticker.h>
 
 Ticker pwmTicker;
 
-const int DIR = 23;
-const int STEP = 5;
-const int SOLENOID = 15;
-const int INTERUPT_PIN = 17;
-const int EN_PIN = 21;
+const int DIR = 23;    // Direction pin
+const int STEP = 5;    // Step pin
+const int EN_PIN = 21; // Enable pin
 
-#define CH2 25
-#define CH3 33
+const int steps_per_rev = 200; // Steps per revolution
+int targetSpeed = 60;          // Target speed in RPM
+int currentSpeed = 0;          // Current speed in RPM
+const int accelRate = 5;       // Acceleration step (RPM per increment)
+const int accelDelay = 1000;     // Delay between acceleration steps (ms)
 
-int RevToFreq(int Rev);
-void rotateClockWise(void);
-void rotateAntiClockWise(void);
-void turnOFFsolenoid();
-void turnONsolenoid();
-void motorStopped(void);
-void interruptRoutine(void);
-void updateMotorSpeed();
-
-int ch2Value;
-int ch3Value;
-int16_t position = 0;
-volatile bool interrupt = false;
-volatile bool rotating_clockwise = false;
-volatile bool rotating_anticlockwise = false;
-
-const int steps_per_rev = 200;
-int target_speed = 0;               // Desired speed (RPM)
-int current_speed = 0;              // Current speed (RPM)
-const int acceleration_step = 1;    // RPM increment per step
-const int acceleration_delay = 500; // Delay between speed changes (ms)
-
-const int PWM_CHANNEL = 0;
-int freq = 300;
-const int resolution = 8;
-const int MAX_DUTY_CYCLE = (int)(pow(2, resolution) - 1);
-// If the channel is off, return the default value
-int readChannel(int channelInput, int minLimit, int maxLimit, int defaultValue)
-{
-    int ch = pulseIn(channelInput, HIGH, 30000);
-    if (ch < 100)
-        return defaultValue;
-    return map(ch, 1000, 2000, minLimit, maxLimit);
-}
-void IRAM_ATTR interruptRoutine()
-{
-    if (rotating_anticlockwise)
-    {
-        position -= 1;
-        if (position == -1)
-        {
-            position = 200;
-        }
-    }
-    else if (rotating_clockwise)
-    {
-        position += 1;
-        if (position == 201)
-        {
-            position = 0;
-        }
-    }
-    if (position == 190)
-    {
-        turnONsolenoid();
-    }
-    if (position == 100)
-    {
-        turnOFFsolenoid();
-    }
-}
+int freq = 0; // Frequency for step pulses
+void stepMotor();
+int RevToFreq(int);
 
 void setup()
 {
     Serial.begin(115200);
+
     pinMode(STEP, OUTPUT);
     pinMode(DIR, OUTPUT);
     pinMode(EN_PIN, OUTPUT);
-    pinMode(SOLENOID, OUTPUT);
-    pinMode(INTERUPT_PIN, INPUT);
-    digitalWrite(EN_PIN, HIGH);
-    attachInterrupt(INTERUPT_PIN, interruptRoutine, RISING);
 
-    pwmTicker.attach_ms(1000 / freq, []()
-                        {
-        static bool state = false;
-        state = !state;
-        digitalWrite(STEP, state ? HIGH : LOW); });
+    digitalWrite(EN_PIN, LOW); // Enable motor
 
-    pinMode(CH2, INPUT);
-    pinMode(CH3, INPUT);
+    // Set initial rotation direction
+    digitalWrite(DIR, LOW); // LOW for clockwise, HIGH for counterclockwise
+
+    // Attach ticker for step pulses
+    pwmTicker.attach_ms(1000 / (freq > 0 ? freq : 1), stepMotor);
 }
 
 void loop()
 {
-    ch2Value = readChannel(CH2, -100, 100, 0);
-    ch3Value = readChannel(CH3, -100, 100, 0);
-
-    if (ch3Value < -110)
+    // Smoothly ramp up or down speed
+    if (currentSpeed < targetSpeed)
     {
-        digitalWrite(EN_PIN, HIGH);
-        turnOFFsolenoid();
-        motorStopped();
-        target_speed = 0;
+        currentSpeed += accelRate;
+        if (currentSpeed > targetSpeed)
+            currentSpeed = targetSpeed;
     }
-    else if (ch3Value > 8)
+    else if (currentSpeed > targetSpeed)
     {
-        rotateClockWise();
-        digitalWrite(EN_PIN, LOW);
-        target_speed = map(ch3Value, 9, 100, 30, 180);
-    }
-    else if (ch3Value < -8)
-    {
-        rotateAntiClockWise();
-        digitalWrite(EN_PIN, LOW);
-        target_speed = map(ch3Value, -9, -100, 30, 180);
-    }
-    else
-    {
-        digitalWrite(EN_PIN, HIGH);
-        turnOFFsolenoid();
-        motorStopped();
-        target_speed = 0;
+        currentSpeed -= accelRate;
+        if (currentSpeed < targetSpeed)
+            currentSpeed = targetSpeed;
     }
 
-    if (current_speed != target_speed)
-    {
-        if (current_speed < target_speed)
-        {
-            current_speed += acceleration_step;
-            if (current_speed > target_speed)
-            {
-                current_speed = target_speed;
-            }
-        }
-        else if (current_speed > target_speed)
-        {
-            current_speed -= acceleration_step;
-            if (current_speed < target_speed)
-            {
-                current_speed = target_speed;
-            }
-        }
-        freq = RevToFreq(current_speed);
-        pwmTicker.attach_ms(1000 / freq, []()
-                            {
-            static bool state = false;
-            state = !state;
-            digitalWrite(STEP, state ? HIGH : LOW); });
-        delay(acceleration_delay);
-    }
+    // Update frequency based on current speed
+    freq = RevToFreq(currentSpeed);
+    pwmTicker.attach_ms(1000 / (freq > 0 ? freq : 1), stepMotor);
 
-    Serial.print(" | Ch2: ");
-    Serial.print(ch2Value);
-    Serial.print(" | Ch3: ");
-    Serial.print(ch3Value);
-    Serial.print(" | Target Speed: ");
-    Serial.print(target_speed);
-    Serial.print(" | Current Speed: ");
-    Serial.println(current_speed);
+    // Debugging output
+    Serial.print("Target Speed: ");
+    Serial.print(targetSpeed);
+    Serial.print(" RPM | Current Speed: ");
+    Serial.println(currentSpeed);
+
+    delay(accelDelay); // Adjust update interval for smoother ramping
+}
+
+void stepMotor()
+{
+    static bool state = false;
+    state = !state;
+    digitalWrite(STEP, state ? HIGH : LOW);
 }
 
 int RevToFreq(int Rev)
 {
-    float tempFrequency = (200.0 / 60.0) * Rev;
-    int frequency = (int)round(tempFrequency);
-    return frequency;
-}
-
-void rotateClockWise(void)
-{
-    rotating_clockwise = true;
-    rotating_anticlockwise = false;
-    digitalWrite(DIR, LOW);
-}
-
-void rotateAntiClockWise(void)
-{
-    rotating_anticlockwise = true;
-    rotating_clockwise = false;
-    digitalWrite(DIR, HIGH);
-}
-
-void motorStopped(void)
-{
-    rotating_anticlockwise = false;
-    rotating_clockwise = false;
-}
-
-void turnONsolenoid()
-{
-    digitalWrite(SOLENOID, HIGH);
-}
-
-void turnOFFsolenoid()
-{
-    digitalWrite(SOLENOID, LOW);
+    float tempFrequency = (200.0 / 60.0) * Rev; // Convert RPM to frequency
+    return (int)round(tempFrequency);
 }
