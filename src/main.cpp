@@ -1,4 +1,4 @@
-// this version of code is to test the motor smooth rotation against the mechanical efficiency
+// test only this version of code is to test the motor smooth rotation against the mechanical efficiency
 #include <Arduino.h>
 #include <Ticker.h>
 
