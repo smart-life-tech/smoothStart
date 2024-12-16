@@ -24,7 +24,7 @@ void motorStopped(void);
 void interruptRoutine(void);
 void updateMotorSpeed();
 void handleSerialCommands();
-int readChannel(int , int , int , int );
+int readChannel(int, int, int, int);
 int calculateSpeed(int);
 // Global variables
 int ch2Value;
