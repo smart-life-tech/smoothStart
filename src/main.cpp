@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+// test only this version of code is to test the motor smooth rotation against the mechanical efficiency
+>>>>>>> 6dc9d1ffe079a2f413a4716a31efdbbab1078479
 #include <Arduino.h>
 #include <Ticker.h>
 
